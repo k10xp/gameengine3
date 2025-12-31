@@ -11,12 +11,11 @@
 #include <sstream>
 #include <iostream>
 
-#include <tuple>
 #include <cctype>
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
-#include <GLFW/glfw3.h>
+#include <ImGuizmo.h>
 
 static int fix_obj_index(int idx, int count) {
     // OBJ:  1..count  (positive)
@@ -225,10 +224,29 @@ struct RenderObj{
     GLuint vao, vbo;
     int vertex_count;
     glm::mat4 model;
-    glm::vec3 objectColor;
+    glm::vec3 color;
 };
 
-static RenderObj create_render_object(GLuint prog, std::string modelPath){
+struct SceneFBO {
+    GLuint fbo = 0;
+    GLuint color = 0;
+    GLuint depth = 0;
+    int w = 0, h = 0;
+};
+
+struct Scene{
+    GLuint prog;
+    std::vector<RenderObj> renderObjs;
+    glm::vec3 camPos;
+    glm::vec3 camTarget;
+    glm::vec3 camUp;
+    glm::vec3 lightPos;
+    glm::vec3 animLight;
+    glm::mat4 view;
+    glm::mat4 proj;
+};
+
+static void create_render_object(Scene *scene, std::string modelPath, glm::mat4 model, glm::vec3 color){
     std::vector<float> vertices = load_obj(modelPath);
     GLuint vao=0, vbo=0;
     glGenVertexArrays(1, &vao);
@@ -243,24 +261,26 @@ static RenderObj create_render_object(GLuint prog, std::string modelPath){
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
     RenderObj renderObj;
-    renderObj.prog = prog;
+    renderObj.prog = scene->prog;
     renderObj.vao = vao;
     renderObj.vbo = vbo;
     renderObj.vertex_count = vertices.size() / 6;
-    return renderObj;
+    renderObj.model = model;
+    renderObj.color = color;
+    scene->renderObjs.push_back(renderObj);
 }
 
-static void render_object(RenderObj renderObj, glm::mat4 view, glm::mat4 proj, glm::vec3 lightPos, glm::vec3 camPos){
-    glUseProgram(renderObj.prog);
-    const GLint locModel = glGetUniformLocation(renderObj.prog, "uModel");
-    const GLint locView  = glGetUniformLocation(renderObj.prog, "uView");
-    const GLint locProj  = glGetUniformLocation(renderObj.prog, "uProj");
-    const GLint locLightPos = glGetUniformLocation(renderObj.prog, "uLightPos");
-    const GLint locViewPos  = glGetUniformLocation(renderObj.prog, "uViewPos");
-    const GLint locObjCol   = glGetUniformLocation(renderObj.prog, "uObjectColor");
-    const GLint locLightCol = glGetUniformLocation(renderObj.prog, "uLightColor");
+static void render_object(RenderObj *renderObj, glm::mat4 view, glm::mat4 proj, glm::vec3 lightPos, glm::vec3 camPos){
+    glUseProgram(renderObj->prog);
+    const GLint locModel = glGetUniformLocation(renderObj->prog, "uModel");
+    const GLint locView  = glGetUniformLocation(renderObj->prog, "uView");
+    const GLint locProj  = glGetUniformLocation(renderObj->prog, "uProj");
+    const GLint locLightPos = glGetUniformLocation(renderObj->prog, "uLightPos");
+    const GLint locViewPos  = glGetUniformLocation(renderObj->prog, "uViewPos");
+    const GLint locObjCol   = glGetUniformLocation(renderObj->prog, "uObjectColor");
+    const GLint locLightCol = glGetUniformLocation(renderObj->prog, "uLightColor");
 
-    glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(renderObj.model));
+    glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(renderObj->model));
     glUniformMatrix4fv(locView,  1, GL_FALSE, glm::value_ptr(view));
     glUniformMatrix4fv(locProj,  1, GL_FALSE, glm::value_ptr(proj));
 
@@ -268,11 +288,11 @@ static void render_object(RenderObj renderObj, glm::mat4 view, glm::mat4 proj, g
     glUniform3fv(locViewPos,  1, glm::value_ptr(camPos));
 
     glm::vec3 lightColor (1.0f, 1.0f, 1.0f);
-    glUniform3fv(locObjCol,   1, glm::value_ptr(renderObj.objectColor));
+    glUniform3fv(locObjCol,   1, glm::value_ptr(renderObj->color));
     glUniform3fv(locLightCol, 1, glm::value_ptr(lightColor));
 
-    glBindVertexArray(renderObj.vao);
-    glDrawArrays(GL_TRIANGLES, 0, renderObj.vertex_count);
+    glBindVertexArray(renderObj->vao);
+    glDrawArrays(GL_TRIANGLES, 0, renderObj->vertex_count);
 }
 
 static void delete_object(RenderObj renderObj){
@@ -289,31 +309,36 @@ static glm::mat4 trs(glm::vec3 position, float angleRadians, glm::vec3 scale){
     return matrix;
 }
 
-struct SceneFBO {
-    GLuint fbo = 0;
-    GLuint color = 0;
-    GLuint depth = 0;
-    int w = 0, h = 0;
-};
-
-struct Scene{
-    GLuint prog;
-    RenderObj icoSphere;
-    RenderObj funnyThing;
-    RenderObj buildings;
-    glm::vec3 camTarget;
-    glm::vec3 camUp;
-    glm::vec3 lightPos;
-};
-
 static void create_scene(Scene* scene){
     scene->prog = createProgram("assets/shaders/lit_shader.vs", "assets/shaders/lit_shader.fs");
-    scene->icoSphere = create_render_object(scene->prog, "assets/models/Planet.obj");
-    scene->funnyThing = create_render_object(scene->prog, "assets/models/funnything.obj");
-    scene->buildings = create_render_object(scene->prog, "assets/models/buildings.obj");
+
+    create_render_object(
+        scene,
+        "assets/models/Planet.obj",
+        trs(glm::vec3(-1.0,0.0,0.0), 0, glm::vec3(0.2,0.2,0.2)),
+        glm::vec3(0.9f, 0.55f, 0.2f));
+
+    create_render_object(
+        scene,
+        "assets/models/funnything.obj",
+        trs(glm::vec3(1.0,0.0,0.0), 0, glm::vec3(0.2,0.2,0.2)),
+        glm::vec3(0.2f, 0.55f, 0.9f));
+
+    create_render_object(
+        scene,
+        "assets/models/buildings.obj",
+        trs(glm::vec3(0.0,-0.6,0.0), 0, glm::vec3(0.2,0.2,0.2)),
+        glm::vec3(0.2f, 0.9f, 0.2f));
+
     scene->camTarget = glm::vec3(0.0f, 0.0f, 0.0f);
     scene->camUp = glm::vec3(0.0f, 1.0f, 0.0f);
     scene->lightPos = glm::vec3(1.2f, 1.5f, 1.0f);
+}
+
+static void delete_scene(Scene* scene){
+    for(int i = 0;i < scene->renderObjs.size(); i++){
+        delete_object(scene->renderObjs[i]);
+    }
 }
 
 static void CreateOrResizeSceneFBO(SceneFBO *s, int w, int h)
@@ -364,31 +389,12 @@ static void RenderSceneToFBO(SceneFBO *s, Scene *scene)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     glViewport(0, 0, s->w, s->h);
-    float aspect = (s->h == 0) ? 1.0f : (float)s->w / (float)s->h;
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    // Animate a little
-    float t = (float)glfwGetTime();
-    glm::vec3 camPos   = glm::vec3(cos(t)*3, 2.2f, sin(t)*3);
-
-    scene->icoSphere.model = trs(glm::vec3(-1.0,0.0,0.0), 0, glm::vec3(0.2,0.2,0.2));
-    scene->icoSphere.objectColor = glm::vec3(0.9f, 0.55f, 0.2f);
-
-    scene->funnyThing.model = trs(glm::vec3(1.0,0.0,0.0), 0, glm::vec3(0.2,0.2,0.2));
-    scene->funnyThing.objectColor = glm::vec3(0.2f, 0.55f, 0.9f);
-
-    scene->buildings.model = trs(glm::vec3(0.0,-0.6,0.0), 0, glm::vec3(0.2,0.2,0.2));
-    scene->buildings.objectColor = glm::vec3(0.2f, 0.9f, 0.2f);
-
-    glm::mat4 view = glm::lookAt(camPos, scene->camTarget, scene->camUp);
-    glm::mat4 proj = glm::perspective(glm::radians(60.0f), aspect, 0.1f, 100.0f);
-    glm::vec3 animLight = scene->lightPos + glm::vec3(std::cos(t) * 0.4f, 0.0f, std::sin(t) * 0.4f);
-
-    render_object(scene->icoSphere, view, proj, animLight, camPos);
-    render_object(scene->funnyThing, view, proj, animLight, camPos);
-    render_object(scene->buildings, view, proj, animLight, camPos);
-
+    for(int i = 0; i < scene->renderObjs.size(); i++){
+        render_object(&scene->renderObjs[i], scene->view, scene->proj, scene->animLight, scene->camPos);
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -467,6 +473,24 @@ static void RenderImGuiFrame(GLFWwindow* window, Scene *scene, SceneFBO *s)
 
     ImGui::Image((ImTextureID)(intptr_t)s->color, avail, ImVec2(0, 1), ImVec2(1, 0));
 
+    ImGuizmo::BeginFrame();
+    ImGuizmo::SetDrawlist();
+    ImGuizmo::SetGizmoSizeClipSpace(0.2f);
+    ImGuizmo::SetRect(
+        ImGui::GetWindowPos().x,
+        ImGui::GetWindowPos().y,
+        ImGui::GetWindowWidth(),
+        ImGui::GetWindowHeight()
+    );
+
+    ImGuizmo::Manipulate(
+        glm::value_ptr(scene->view),
+        glm::value_ptr(scene->proj),
+        ImGuizmo::TRANSLATE,
+        ImGuizmo::LOCAL,
+        glm::value_ptr(scene->renderObjs[0].model)
+    );
+
     ImGui::End();
 
     // Render
@@ -520,18 +544,32 @@ int main() {
   // Basic “camera”
 
   InitImGui(window);
+  float rotation = 0;
 
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
       glfwSetWindowShouldClose(window, GLFW_TRUE);
 
+    float t = (float)glfwGetTime();
+
+    if(glfwGetKey(window, GLFW_KEY_LEFT)){
+        rotation -= 0.01;
+    }
+    if(glfwGetKey(window, GLFW_KEY_RIGHT)){
+        rotation += 0.01;
+    }
+
+    float aspect = (s.h == 0) ? 1.0f : (float)s.w / (float)s.h;
+    scene.camPos = glm::vec3(cos(rotation)*3, 2.2f, sin(rotation)*3);
+    scene.animLight = scene.lightPos + glm::vec3(std::cos(t) * 0.4f, 0.0f, std::sin(t) * 0.4f);
+    scene.view = glm::lookAt(scene.camPos, scene.camTarget, scene.camUp);
+    scene.proj = glm::perspective(glm::radians(60.0f), aspect, 0.1f, 100.0f);
+
     RenderImGuiFrame(window, &scene, &s);
     glfwSwapBuffers(window);
   }
-  delete_object(scene.icoSphere);
-  delete_object(scene.buildings);
-  delete_object(scene.funnyThing);
+  delete_scene(&scene);
   destroyImGui();
 
   glfwDestroyWindow(window);

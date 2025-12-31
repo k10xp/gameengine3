@@ -23,11 +23,13 @@ target_sources(mygl PRIVATE
 
     ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+    external/ImGuizmo/ImGuizmo.cpp
 )
 
 target_include_directories(mygl PRIVATE
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
+    external/ImGuizmo
 )
 
 target_link_libraries(mygl PRIVATE
