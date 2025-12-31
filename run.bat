@@ -1,2 +1,3 @@
+cmake -S . -B build
 cmake --build build
-./build/mygl
+build\\Debug\\mygl.exe
