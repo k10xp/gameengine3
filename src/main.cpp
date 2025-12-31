@@ -10,6 +10,7 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <type_traits>
 
 static std::vector<float> load_obj(const std::string& path)
 {
