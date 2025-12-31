@@ -222,6 +222,7 @@ static GLuint createProgram(std::string vsPath, std::string fsPath){
 }
 
 struct RenderObj{
+    std::string name;
     GLuint prog;
     GLuint vao, vbo;
     int vertex_count;
@@ -244,6 +245,7 @@ struct Scene{
     OrbitCamera orbitCamera;
     glm::vec3 lightPos;
     glm::vec3 animLight;
+    int selected;
 };
 
 static glm::mat4 renderobject_model(RenderObj *renderObj){
@@ -269,6 +271,7 @@ static void create_render_object(Scene *scene, std::string modelPath, glm::vec3 
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
     RenderObj renderObj;
+    renderObj.name = modelPath;
     renderObj.prog = scene->prog;
     renderObj.vao = vao;
     renderObj.vbo = vbo;
@@ -314,7 +317,7 @@ static void delete_object(RenderObj renderObj){
 
 static void create_scene(Scene* scene){
     scene->prog = createProgram("assets/shaders/lit_shader.vs", "assets/shaders/lit_shader.fs");
-
+    scene->selected = 0;
     orbitcamera_initialize(&scene->orbitCamera);
     create_render_object(
         scene,
@@ -464,12 +467,20 @@ static void RenderImGuiFrame(GLFWwindow* window, Scene *scene, SceneFBO *s)
     ImGui::End();
 
     ImGui::Begin("Inspector");
-    ImGui::DragFloat3("position", &scene->renderObjs[0].position.x, 0.01f);
-    ImGui::DragFloat3("rotation", &scene->renderObjs[0].rotation.x, 1.0);
-    ImGui::DragFloat3("scale", &scene->renderObjs[0].scale.x, 0.01f);
-    ImGui::ColorEdit3("color", &scene->renderObjs[0].color.x);
+    RenderObj *o = &scene->renderObjs[scene->selected];
+    ImGui::DragFloat3("position", &o->position.x, 0.01f);
+    ImGui::DragFloat3("rotation", &o->rotation.x, 1.0);
+    ImGui::DragFloat3("scale", &o->scale.x, 0.01f);
+    ImGui::ColorEdit3("color", &o->color.x);
     ImGui::End();
 
+    ImGui::Begin("Hierarchy");
+    for(int i=0;i<scene->renderObjs.size();i++){
+        if(ImGui::Button(scene->renderObjs[i].name.c_str())){
+            scene->selected = i;
+        }
+    }
+    ImGui::End();
 
     ImGui::Begin("Scene");
 
@@ -494,7 +505,7 @@ static void RenderImGuiFrame(GLFWwindow* window, Scene *scene, SceneFBO *s)
 
     glm::mat4 view = orbitcamera_view(&scene->orbitCamera);
     glm::mat4 proj = orbitcamera_proj(&scene->orbitCamera, (float)s->w / (float)s->h);
-    glm::mat4 model = renderobject_model(&scene->renderObjs[0]);
+    glm::mat4 model = renderobject_model(&scene->renderObjs[scene->selected]);
 
     if(ImGuizmo::Manipulate(
         glm::value_ptr(view),
@@ -503,7 +514,7 @@ static void RenderImGuiFrame(GLFWwindow* window, Scene *scene, SceneFBO *s)
         ImGuizmo::LOCAL,
         glm::value_ptr(model)
     )){
-        scene->renderObjs[0].position = glm::vec3(model[3]);
+        scene->renderObjs[scene->selected].position = glm::vec3(model[3]);
     }
 
     ImGui::End();
@@ -557,8 +568,6 @@ int main() {
 
   glUseProgram(scene.prog);
 
-  // Basic “camera”
-
   InitImGui(window);
   float rotation = 0;
 
@@ -566,7 +575,6 @@ int main() {
     glfwPollEvents();
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
       glfwSetWindowShouldClose(window, GLFW_TRUE);
-
     float t = (float)glfwGetTime();
 
     if(glfwGetKey(window, GLFW_KEY_LEFT)){
@@ -588,7 +596,6 @@ int main() {
     if(glfwGetKey(window, GLFW_KEY_MINUS)){
         orbitcamera_zoom(&scene.orbitCamera, -0.1);
     }
-
     float aspect = (s.h == 0) ? 1.0f : (float)s.w / (float)s.h;
     scene.animLight = scene.lightPos + glm::vec3(std::cos(t) * 0.4f, 0.0f, std::sin(t) * 0.4f);
 
