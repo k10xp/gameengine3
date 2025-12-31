@@ -11,7 +11,7 @@ target_include_directories(glad PUBLIC external/glad/include)
 add_subdirectory(external/glfw)
 add_subdirectory(external/glm)
 
-add_executable(mygl src/main.cpp)
+add_executable(mygl src/main.cpp src/orbitcamera.cpp)
 
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/external/imgui)
 

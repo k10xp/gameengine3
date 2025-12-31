@@ -12,7 +12,12 @@
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <ImGuizmo.h>
+#include "glm/ext/matrix_transform.hpp"
+#include <glm/gtc/matrix_transform.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/euler_angles.hpp>
 #include "orbitcamera.h"
+#include <glm/gtc/quaternion.hpp>
 
 static int fix_obj_index(int idx, int count) {
     // OBJ:  1..count  (positive)
@@ -220,7 +225,9 @@ struct RenderObj{
     GLuint prog;
     GLuint vao, vbo;
     int vertex_count;
-    glm::mat4 model;
+    glm::vec3 position;
+    glm::vec3 rotation;
+    glm::vec3 scale;
     glm::vec3 color;
 };
 
@@ -239,7 +246,15 @@ struct Scene{
     glm::vec3 animLight;
 };
 
-static void create_render_object(Scene *scene, std::string modelPath, glm::mat4 model, glm::vec3 color){
+static glm::mat4 renderobject_model(RenderObj *renderObj){
+    glm::mat4 trans = glm::translate(glm::mat4(1.0), renderObj->position);
+    glm::vec3 eulerRad = glm::radians(renderObj->rotation);
+    glm::mat4 rot = glm::eulerAngleXYZ(eulerRad.x, eulerRad.y, eulerRad.z);
+    glm::mat4 scale = glm::scale(glm::mat4(1.0), renderObj->scale);
+    return trans * rot * scale;
+}
+
+static void create_render_object(Scene *scene, std::string modelPath, glm::vec3 position, glm::vec3 rotation, glm::vec3 scale, glm::vec3 color){
     std::vector<float> vertices = load_obj(modelPath);
     GLuint vao=0, vbo=0;
     glGenVertexArrays(1, &vao);
@@ -258,7 +273,9 @@ static void create_render_object(Scene *scene, std::string modelPath, glm::mat4 
     renderObj.vao = vao;
     renderObj.vbo = vbo;
     renderObj.vertex_count = vertices.size() / 6;
-    renderObj.model = model;
+    renderObj.position = position;
+    renderObj.rotation = rotation;
+    renderObj.scale = scale;
     renderObj.color = color;
     scene->renderObjs.push_back(renderObj);
 }
@@ -273,7 +290,8 @@ static void render_object(RenderObj *renderObj, glm::mat4 view, glm::mat4 proj, 
     const GLint locObjCol   = glGetUniformLocation(renderObj->prog, "uObjectColor");
     const GLint locLightCol = glGetUniformLocation(renderObj->prog, "uLightColor");
 
-    glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(renderObj->model));
+    glm::mat4 model = renderobject_model(renderObj);
+    glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(model));
     glUniformMatrix4fv(locView,  1, GL_FALSE, glm::value_ptr(view));
     glUniformMatrix4fv(locProj,  1, GL_FALSE, glm::value_ptr(proj));
 
@@ -294,14 +312,6 @@ static void delete_object(RenderObj renderObj){
     glDeleteVertexArrays(1, &renderObj.vao);
 }
 
-static glm::mat4 trs(glm::vec3 position, float angleRadians, glm::vec3 scale){
-    glm::mat4 matrix = glm::mat4(1.0f);
-    matrix = glm::translate(matrix, position);
-    matrix = glm::rotate(matrix, angleRadians, glm::vec3(0.0,1.0,0.0));
-    matrix = glm::scale(matrix, scale);
-    return matrix;
-}
-
 static void create_scene(Scene* scene){
     scene->prog = createProgram("assets/shaders/lit_shader.vs", "assets/shaders/lit_shader.fs");
 
@@ -309,19 +319,25 @@ static void create_scene(Scene* scene){
     create_render_object(
         scene,
         "assets/models/Planet.obj",
-        trs(glm::vec3(-1.0,0.0,0.0), 0, glm::vec3(0.2,0.2,0.2)),
+        glm::vec3(-1.0,0.0,0.0),
+        glm::vec3(0.0, 0.0, 0.0),
+        glm::vec3(0.2,0.2,0.2),
         glm::vec3(0.9f, 0.55f, 0.2f));
 
     create_render_object(
         scene,
         "assets/models/funnything.obj",
-        trs(glm::vec3(1.0,0.0,0.0), 0, glm::vec3(0.2,0.2,0.2)),
+        glm::vec3(1.0,0.0,0.0),
+        glm::vec3(0.0, 0.0, 0.0),
+        glm::vec3(0.2,0.2,0.2),
         glm::vec3(0.2f, 0.55f, 0.9f));
 
     create_render_object(
         scene,
         "assets/models/buildings.obj",
-        trs(glm::vec3(0.0,-0.6,0.0), 0, glm::vec3(0.2,0.2,0.2)),
+        glm::vec3(0.0,-0.6,0.0),
+        glm::vec3(0.0, 0.0, 0.0),
+        glm::vec3(0.2,0.2,0.2),
         glm::vec3(0.2f, 0.9f, 0.2f));
 
     scene->lightPos = glm::vec3(1.2f, 1.5f, 1.0f);
@@ -386,7 +402,7 @@ static void RenderSceneToFBO(SceneFBO *s, Scene *scene)
 
     glm::vec3 camPos = orbitcamera_position(&scene->orbitCamera);
     glm::mat4 view = orbitcamera_view(&scene->orbitCamera);
-    glm::mat4 proj = orbitcamera_proj(&scene->orbitCamera);
+    glm::mat4 proj = orbitcamera_proj(&scene->orbitCamera, (float)s->w / (float)s->h);
     for(int i = 0; i < scene->renderObjs.size(); i++){
         render_object(&scene->renderObjs[i], view, proj, scene->animLight, camPos);
     }
@@ -447,13 +463,11 @@ static void RenderImGuiFrame(GLFWwindow* window, Scene *scene, SceneFBO *s)
     ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
     ImGui::End();
 
-    // 2) Normal windows become dockable
-    ImGui::Begin("Scene");
-    ImGui::Text("Hello docking!");
-    ImGui::End();
-
     ImGui::Begin("Inspector");
-    ImGui::Text("Stuff here...");
+    ImGui::DragFloat3("position", &scene->renderObjs[0].position.x, 0.01f);
+    ImGui::DragFloat3("rotation", &scene->renderObjs[0].rotation.x, 1.0);
+    ImGui::DragFloat3("scale", &scene->renderObjs[0].scale.x, 0.01f);
+    ImGui::ColorEdit3("color", &scene->renderObjs[0].color.x);
     ImGui::End();
 
 
@@ -479,14 +493,18 @@ static void RenderImGuiFrame(GLFWwindow* window, Scene *scene, SceneFBO *s)
     );
 
     glm::mat4 view = orbitcamera_view(&scene->orbitCamera);
-    glm::mat4 proj = orbitcamera_proj(&scene->orbitCamera);
-    ImGuizmo::Manipulate(
+    glm::mat4 proj = orbitcamera_proj(&scene->orbitCamera, (float)s->w / (float)s->h);
+    glm::mat4 model = renderobject_model(&scene->renderObjs[0]);
+
+    if(ImGuizmo::Manipulate(
         glm::value_ptr(view),
         glm::value_ptr(proj),
         ImGuizmo::TRANSLATE,
         ImGuizmo::LOCAL,
-        glm::value_ptr(scene->renderObjs[0].model)
-    );
+        glm::value_ptr(model)
+    )){
+        scene->renderObjs[0].position = glm::vec3(model[3]);
+    }
 
     ImGui::End();
 
