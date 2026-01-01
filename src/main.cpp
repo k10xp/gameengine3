@@ -16,7 +16,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/euler_angles.hpp>
-#include "orbitcamera.h"
+#include "orbitcamera.hpp"
 #include <glm/gtc/quaternion.hpp>
 
 static int fix_obj_index(int idx, int count) {
